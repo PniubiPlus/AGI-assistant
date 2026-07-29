@@ -1,0 +1,101 @@
+server:
+  port: 8090
+
+spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.kafka.KafkaAutoConfiguration
+
+app:
+  llm:
+    # api-url: https://ark.cn-beijing.volces.com/api/v3/chat/completions
+    api-url: https://api.siliconflow.cn/v1/chat/completions
+    # api-key: "97443eb3-4d60-4738-bf9d-e7bf364566d2"
+    api-key: "sk-yltwedyitdqugfuxxhqyhnsxlepjrethiiasufqrqmabxfcj"
+    # model: ep-20260430233018-tqktj
+    model: tencent/Hunyuan-MT-7B
+    temperature: 0.7
+  embedding:
+    api-url: https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal
+    api-key: "97443eb3-4d60-4738-bf9d-e7bf364566d2"
+    model: ep-20260119190844-zzrq7
+  milvus:
+    host: localhost
+    port: 19530
+  postgres:
+    host: localhost
+    port: 5432
+    user: aiagent
+    password: aiagent123
+    database: aiagent
+  elasticsearch:
+    addresses: http://localhost:9200
+    username: elastic
+    password: changeme
+  kafka:
+    brokers: localhost:29092
+    topic: agent-events
+  rag:
+    chunk-size: 200
+    chunk-overlap: 50
+    top-k: 3
+    rrf-constant-k: 60
+    semantic-weight: 0.7
+    enable-hybrid-search: true
+    rag-milvus-dim: 2048
+  memory:
+    short-term-max-turns: 5
+    long-term-top-k: 3
+    consolidation:
+      similarity-threshold: 0.80
+      dedup-threshold: 0.95
+      ttl-days: 30
+      decay-rate: 0.995
+      min-importance: 0.3
+      trigger-interval: 5
+  harness:
+    max-retries: 3
+    retry-delay-ms: 200
+    step-timeout-ms: 5000
+    max-iterations: 5
+  search:
+    api-key: "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"
+    api-url: "https://api.tavily.com/search"
+
+  # ===== 知识图谱（Neo4j，可选）=====
+  neo4j:
+    uri: "bolt://localhost:7687"
+    user: "neo4j"
+    password: "password123"
+    max-hops: 2
+    weight: 0.3
+    enabled: true
+
+  # ===== 沙箱执行（用于终端命令工具）=====
+  sandbox:
+    enabled: true
+    backend: "docker"        # docker | local | mock
+    image: "alpine:3.19"
+    timeout-ms: 30000
+    max-output-bytes: 65536
+    memory-limit-mb: 256
+    cpu-percent: 50
+    max-pids: 64
+    network-disabled: true
+    readonly-rootfs: true
+
+  # ===== 命令安全校验 =====
+  security:
+    max-command-length: 500
+    allowlist-mode: false
+    allowlist:
+      - "ls"
+      - "cat"
+      - "echo"
+      - "pwd"
+      - "date"
+      - "python3"
+      - "node"
+      - "go"
+      - "java"
