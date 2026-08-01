@@ -1,9 +1,9 @@
 # AGI Assistant - Java 版本
-# 从 Go 版本的 1:1 翻译
+# 从 某Go开发的Agent项目翻译而来 
 
 ## 📋 项目概述
 
-这是一个从 Go 翻译为 Java（Spring Boot）的**全栈 AI Agent 系统**。
+这是一个 Java（Spring Boot）的**全栈 AI Agent 系统**。
 
 这是一个生产级的 AI 助手，集成了以下功能：
 - **阶段一**：LLM 聊天（多轮对话）
@@ -146,26 +146,3 @@ search:             # Tavily 搜索 API（可选）
 - **Jackson** - JSON 处理
 - **SnakeYAML** - YAML 解析
 - **Lombok**（可选）- 减少样板代码
-
-## 🔄 从 Go 版本迁移
-
-本 Java 版本是 Go 版本（`AGI-assistant/final`）的 **1:1 翻译**：
-
-| Go 源文件 | Java 目标文件 |
-|----|------|
-| `config/config.go` | `config/ApiConfig.java` |
-| `internal/llm/llm.go` | `service/llm/LlmClient.java` |
-| `internal/rag/rag.go` | `service/rag/RagEngine.java` |
-| `internal/tools/tools.go` | `service/tools/ToolsService.java` |
-| `internal/memory/memory.go` | `service/memory/*Memory.java` |
-| `internal/agent/agent.go` | `service/agent/UnifiedAgent.java` |
-| `internal/handler/handler.go` | `controller/ApiController.java` |
-| `internal/infra/infra.go` | `service/infra/InfrastructureService.java` |
-
-## 📝 许可证
-
-MIT 许可证
-
-## 🙏 致谢
-
-Go 原版作者。Java 版本为教育和参考目的而翻译。
