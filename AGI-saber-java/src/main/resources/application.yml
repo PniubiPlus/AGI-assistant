@@ -17,9 +17,25 @@ app:
     model: tencent/Hunyuan-MT-7B
     temperature: 0.7
   embedding:
-    api-url: https://ark.cn-beijing.volces.com/api/v3/embeddings/multimodal
-    api-key: "97443eb3-4d60-4738-bf9d-e7bf364566d2"
-    model: ep-20260119190844-zzrq7
+    # api-url: http://127.0.0.1:11434/v1/embeddings
+    # api-key: dummy
+    # model: bge-small-zh-v1.5
+
+    # api-url: https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings
+    # api-key: "sk-d144ab6f448546928a8f88550a658a68"
+    # model: text-embedding-async-v1
+
+    api-url: https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings
+    api-key: "sk-d144ab6f448546928a8f88550a658a68"
+    model: text-embedding-v3
+    
+  #  api-url: http://127.0.0.1:11434/v1
+  #  api-key: dummy
+  #  model: qllama/bge-small-zh-v1.5
+
+    # api-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    # api-key: sk-c31fed497a9e42acbecc7599710e8345
+    # model: qwen3-max
   milvus:
     host: localhost
     port: 19530
@@ -30,7 +46,7 @@ app:
     password: aiagent123
     database: aiagent
   elasticsearch:
-    addresses: http://localhost:9200
+    addresses: http://localhost:19200
     username: elastic
     password: changeme
   kafka:
@@ -43,7 +59,7 @@ app:
     rrf-constant-k: 60
     semantic-weight: 0.7
     enable-hybrid-search: true
-    rag-milvus-dim: 2048
+    rag-milvus-dim: 1024
   memory:
     short-term-max-turns: 5
     long-term-top-k: 3
