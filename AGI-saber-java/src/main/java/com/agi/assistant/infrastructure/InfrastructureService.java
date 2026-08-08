@@ -123,9 +123,20 @@ public class InfrastructureService {
                 "ALTER TABLE long_term_memory ADD COLUMN IF NOT EXISTS last_accessed TIMESTAMP DEFAULT NOW()",
                 """
                 CREATE TABLE IF NOT EXISTS rag_chunks (
-                    id BIGSERIAL PRIMARY KEY, doc_hash TEXT NOT NULL, chunk_idx INT NOT NULL,
-                    content TEXT NOT NULL, embedding JSONB, created_at TIMESTAMP DEFAULT NOW(),
-                    UNIQUE(doc_hash, chunk_idx))"""
+                    id BIGSERIAL PRIMARY KEY, doc_hash TEXT NOT NULL, document_name TEXT NOT NULL DEFAULT '未命名文档',
+                    chunk_idx INT NOT NULL, content TEXT NOT NULL, embedding JSONB, created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE(doc_hash, chunk_idx))""",
+                "ALTER TABLE rag_chunks ADD COLUMN IF NOT EXISTS document_name TEXT",
+                "UPDATE rag_chunks SET document_name = '未命名文档' WHERE document_name IS NULL",
+                "ALTER TABLE rag_chunks ALTER COLUMN document_name SET DEFAULT '未命名文档'",
+                "ALTER TABLE rag_chunks ALTER COLUMN document_name SET NOT NULL",
+                """
+                CREATE TABLE IF NOT EXISTS deleted_docs_history (
+                    id BIGSERIAL PRIMARY KEY, doc_hash TEXT NOT NULL, document_name TEXT NOT NULL,
+                    chunk_count INTEGER NOT NULL DEFAULT 0, deleted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT deleted_docs_history_chunk_count_check CHECK (chunk_count >= 0))""",
+                "CREATE INDEX IF NOT EXISTS idx_deleted_docs_history_doc_hash ON deleted_docs_history (doc_hash)",
+                "CREATE INDEX IF NOT EXISTS idx_deleted_docs_history_deleted_at ON deleted_docs_history (deleted_at DESC)"
         };
         try (Statement stmt = pgConn.createStatement()) {
             for (String ddl : ddls) stmt.execute(ddl);
@@ -331,12 +342,12 @@ public class InfrastructureService {
 
     // ================= RAG Chunks =================
 
-    public long saveRAGChunk(String docHash, int chunkIdx, String content, String embeddingJson) {
+    public long saveRAGChunk(String docHash, String documentName, int chunkIdx, String content, String embeddingJson) {
         if (pgConn == null) return -1;
         try (PreparedStatement ps = pgConn.prepareStatement(
-                "INSERT INTO rag_chunks (doc_hash, chunk_idx, content, embedding) VALUES (?, ?, ?, ?::jsonb) " +
-                        "ON CONFLICT (doc_hash, chunk_idx) DO UPDATE SET content = EXCLUDED.content, embedding = EXCLUDED.embedding RETURNING id")) {
-            ps.setString(1, docHash); ps.setInt(2, chunkIdx); ps.setString(3, content); ps.setString(4, embeddingJson);
+                "INSERT INTO rag_chunks (doc_hash, document_name, chunk_idx, content, embedding) VALUES (?, ?, ?, ?, ?::jsonb) " +
+                        "ON CONFLICT (doc_hash, chunk_idx) DO UPDATE SET document_name = EXCLUDED.document_name, content = EXCLUDED.content, embedding = EXCLUDED.embedding RETURNING id")) {
+            ps.setString(1, docHash); ps.setString(2, documentName); ps.setInt(3, chunkIdx); ps.setString(4, content); ps.setString(5, embeddingJson);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return rs.getLong(1);
             }
@@ -398,6 +409,96 @@ public class InfrastructureService {
             } catch (SQLException e) { log.warn("删除 RAG chunks 失败: {}", e.getMessage()); }
         }
         return ids;
+    }
+
+    public DeletedDocumentRow loadDocumentForDeletion(String docHash) {
+        if (pgConn == null) return null;
+        try (PreparedStatement ps = pgConn.prepareStatement(
+                "SELECT document_name, COUNT(*) FROM rag_chunks WHERE doc_hash = ? GROUP BY document_name")) {
+            ps.setString(1, docHash);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return new DeletedDocumentRow(docHash, rs.getString(1), rs.getInt(2));
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("查询待删除文档信息失败: {}", e.getMessage());
+        }
+        return null;
+    }
+
+    public boolean saveDeletedDocument(String docHash, String documentName, int chunkCount) {
+        if (pgConn == null) return false;
+        try (PreparedStatement ps = pgConn.prepareStatement(
+                "INSERT INTO deleted_docs_history (doc_hash, document_name, chunk_count) VALUES (?, ?, ?)")) {
+            ps.setString(1, docHash);
+            ps.setString(2, documentName == null || documentName.isBlank() ? "未命名文档" : documentName);
+            ps.setInt(3, Math.max(0, chunkCount));
+            ps.executeUpdate();
+            return true;
+        } catch (SQLException e) {
+            log.warn("已删除文档历史保存失败: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    public static class DeletedDocumentRow {
+        public String docHash;
+        public String documentName;
+        public int chunkCount;
+
+        public DeletedDocumentRow(String docHash, String documentName, int chunkCount) {
+            this.docHash = docHash;
+            this.documentName = documentName;
+            this.chunkCount = chunkCount;
+        }
+    }
+
+    public List<DeletedDocumentRow> loadActiveDocuments() {
+        List<DeletedDocumentRow> rows = new ArrayList<>();
+        if (pgConn == null) return rows;
+        try (Statement stmt = pgConn.createStatement();
+             ResultSet rs = stmt.executeQuery(
+                     "SELECT doc_hash, document_name, COUNT(*) FROM rag_chunks " +
+                             "GROUP BY doc_hash, document_name ORDER BY MAX(created_at) DESC")) {
+            while (rs.next()) rows.add(new DeletedDocumentRow(rs.getString(1), rs.getString(2), rs.getInt(3)));
+        } catch (SQLException e) {
+            log.warn("加载当前文档列表失败: {}", e.getMessage());
+        }
+        return rows;
+    }
+
+    public static class DeletedDocumentHistoryRow {
+        public long id;
+        public String docHash;
+        public String documentName;
+        public int chunkCount;
+        public Timestamp deletedAt;
+    }
+
+    public List<DeletedDocumentHistoryRow> loadDeletedDocuments(int limit) {
+        List<DeletedDocumentHistoryRow> rows = new ArrayList<>();
+        if (pgConn == null) return rows;
+        int safeLimit = Math.max(1, Math.min(limit, 500));
+        try (PreparedStatement ps = pgConn.prepareStatement(
+                "SELECT id, doc_hash, document_name, chunk_count, deleted_at " +
+                        "FROM deleted_docs_history ORDER BY deleted_at DESC, id DESC LIMIT ?")) {
+            ps.setInt(1, safeLimit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    DeletedDocumentHistoryRow row = new DeletedDocumentHistoryRow();
+                    row.id = rs.getLong("id");
+                    row.docHash = rs.getString("doc_hash");
+                    row.documentName = rs.getString("document_name");
+                    row.chunkCount = rs.getInt("chunk_count");
+                    row.deletedAt = rs.getTimestamp("deleted_at");
+                    rows.add(row);
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("加载已删除文档历史失败: {}", e.getMessage());
+        }
+        return rows;
     }
 
     // ================= Chat History =================

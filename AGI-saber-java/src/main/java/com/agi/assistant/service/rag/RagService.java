@@ -62,9 +62,9 @@ public class RagService {
     public boolean isLoaded() { return loaded; }
     public String getMode() { return store.getMode(); }
 
-    public Map.Entry<Integer, String> ingest(String doc) {
+    public Map.Entry<Integer, String> ingest(String doc, String documentName) {
         List<Chunk> chunks = splitter.split(doc);
-        String docHash = store.index(chunks, doc);
+        String docHash = store.index(chunks, doc, documentName);
         loaded = true;
         infra.publishEvent("rag.ingest",
                 String.format("{\"chunk_count\":%d,\"mode\":\"%s\",\"doc_hash\":\"%s\"}",
@@ -78,11 +78,26 @@ public class RagService {
         return Map.entry(chunks.size(), docHash);
     }
 
-    public void delete(String docHash) {
-        store.delete(docHash);
+    public DeletedDocument delete(String docHash) {
+        InfrastructureService.DeletedDocumentRow document = infra.loadDocumentForDeletion(docHash);
+        List<Long> deletedChunkIds = store.delete(docHash);
         if (kg != null && kg.available()) kg.deleteDocument(docHash);
-        // 重新检测是否还有 chunks
+        if (document != null) {
+            infra.saveDeletedDocument(docHash, document.documentName, deletedChunkIds.size());
+        }
         loaded = !infra.loadAllRAGChunks().isEmpty();
+        String documentName = document == null ? "未命名文档" : document.documentName;
+        return new DeletedDocument(documentName, deletedChunkIds.size());
+    }
+
+    public static class DeletedDocument {
+        public final String documentName;
+        public final int chunkCount;
+
+        public DeletedDocument(String documentName, int chunkCount) {
+            this.documentName = documentName;
+            this.chunkCount = chunkCount;
+        }
     }
 
     public QueryResult query(String question) {

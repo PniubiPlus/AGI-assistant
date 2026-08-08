@@ -87,7 +87,7 @@ public class AgentController {
         if (content == null || content.isEmpty()) {
             return Map.of("error", "content is required");
         }
-        Map.Entry<Integer, String> result = agent.getRagService().ingest(content);
+        Map.Entry<Integer, String> result = agent.getRagService().ingest(content, req.get("document_name"));
         List<Chunk> chunks = agent.getRagService().getChunks();
         return Map.of(
                 "chunk_count", result.getKey(),
@@ -105,8 +105,43 @@ public class AgentController {
         if (docHash == null || docHash.isEmpty()) {
             return Map.of("error", "doc_hash is required");
         }
-        agent.getRagService().delete(docHash);
-        return Map.of("ok", true, "doc_hash", docHash);
+        RagService.DeletedDocument deleted = agent.getRagService().delete(docHash);
+        return Map.of("ok", true, "doc_hash", docHash,
+                "document_name", deleted.documentName, "chunk_count", deleted.chunkCount);
+    }
+
+    /**
+     * GET /api/docs/active - List documents currently in the knowledge base
+     */
+    @GetMapping("/docs/active")
+    public List<Map<String, Object>> activeDocs() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (InfrastructureService.DeletedDocumentRow row : infra.loadActiveDocuments()) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("doc_hash", row.docHash);
+            item.put("document_name", row.documentName);
+            item.put("chunk_count", row.chunkCount);
+            result.add(item);
+        }
+        return result;
+    }
+
+    /**
+     * GET /api/docs/deleted - List deleted document history
+     */
+    @GetMapping("/docs/deleted")
+    public List<Map<String, Object>> deletedDocs(@RequestParam(defaultValue = "100") int limit) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (InfrastructureService.DeletedDocumentHistoryRow row : infra.loadDeletedDocuments(limit)) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("id", row.id);
+            item.put("doc_hash", row.docHash);
+            item.put("document_name", row.documentName);
+            item.put("chunk_count", row.chunkCount);
+            item.put("deleted_at", row.deletedAt);
+            result.add(item);
+        }
+        return result;
     }
 
     /**

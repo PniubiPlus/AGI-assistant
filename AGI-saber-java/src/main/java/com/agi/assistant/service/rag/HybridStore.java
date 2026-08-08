@@ -57,8 +57,9 @@ public class HybridStore {
     public String getMode() { return mode; }
 
     /** Index：写入 PG + Milvus + ES，返回 docHash */
-    public String index(List<Chunk> chunks, String docContent) {
+    public String index(List<Chunk> chunks, String docContent, String documentName) {
         String docHash = sha256(docContent).substring(0, 16);
+        String safeDocumentName = documentName == null || documentName.isBlank() ? "未命名文档" : documentName;
 
         List<Long> pgIds = new ArrayList<>();
         List<String> contents = new ArrayList<>();
@@ -74,7 +75,7 @@ public class HybridStore {
             if (emb != null && !emb.isEmpty()) {
                 try { embJson = mapper.writeValueAsString(emb); } catch (Exception ignored) {}
             }
-            long pgId = infra.saveRAGChunk(docHash, i, c.getContent(), embJson);
+            long pgId = infra.saveRAGChunk(docHash, safeDocumentName, i, c.getContent(), embJson);
             if (pgId < 0) {
                 log.warn("RAG chunk 写入 PG 失败 (idx={})", i);
                 continue;

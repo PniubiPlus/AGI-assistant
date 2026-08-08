@@ -83,6 +83,41 @@ body {
 }
 
 /* ── 私人黑洞 ── */
+.sec-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 12px;
+}
+.sec-label-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.history-link {
+  border: 1px solid #e5e7eb;
+  background: #f8fafc;
+  color: #94a3b8;
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s;
+}
+.history-link:hover { color: var(--primary); background: var(--primary-l); border-color: #c7d2fe; }
+.clear-all-btn {
+  border: 1px solid #fecaca;
+  background: #fff1f2;
+  color: #dc2626;
+  border-radius: 7px;
+  padding: 3px 8px;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color .15s, background .15s, border-color .15s, transform .12s;
+}
+.clear-all-btn:hover { background: #fee2e2; border-color: #f87171; transform: translateY(-1px); }
+.clear-all-btn:active { transform: translateY(0); }
 .blackhole {
   padding: 0 12px 12px;
   flex-shrink: 0;
@@ -626,7 +661,13 @@ body {
   </div>
 
   <!-- 私人黑洞 -->
-  <div class="sec-label">私人黑洞</div>
+  <div class="sec-label sec-label-row">
+    <span>私人黑洞</span>
+    <div class="sec-label-actions">
+      <button class="clear-all-btn" type="button" onclick="clearAllKnowledgeBase()">删除所有知识库</button>
+      <button class="history-link" type="button" onclick="openHistoryKnowledge()">历史知识库</button>
+    </div>
+  </div>
   <div class="blackhole">
     <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
       <div class="uz-icon">🕳️</div>
@@ -714,7 +755,7 @@ let selectedTools = [];   // names of checked tools
 let availableTools = [];  // [{name, desc}]
 let sessions = JSON.parse(localStorage.getItem('ai_sessions') || '[]');
 let currentId = null;
-let uploadedDocs = JSON.parse(localStorage.getItem('ai_docs') || '[]');
+let uploadedDocs = [];
 let isLoading = false;
 
 // ══════════════════════════════════════════
@@ -808,13 +849,12 @@ async function uploadFile(file) {
     const res = await fetch('/api/upload', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text })
+      body: JSON.stringify({ content: text, document_name: file.name })
     }).then(r => r.json());
 
-    const doc = { name: file.name, chunks: res.chunk_count, ts: Date.now() };
+    const doc = { name: file.name, chunks: res.chunk_count, docHash: res.doc_hash || '', ts: Date.now() };
     uploadedDocs = uploadedDocs.filter(d => d.name !== file.name);
     uploadedDocs.unshift(doc);
-    localStorage.setItem('ai_docs', JSON.stringify(uploadedDocs));
     renderDocs();
   } catch(e) {
     console.error('上传失败', e);
@@ -824,21 +864,82 @@ async function uploadFile(file) {
 function renderDocs() {
   const el = document.getElementById('docList');
   el.innerHTML = uploadedDocs.slice(0, 6).map(d => `
-    <div class="doc-item" title="${d.name}">
+    <div class="doc-item" title="${d.document_name || d.name}">
       <span class="doc-icon">✓</span>
-      <span class="doc-name">${d.name}</span>
-      <span class="doc-chunks">${d.chunks} 块</span>
-      <button class="doc-delete" type="button" onclick="deleteDoc(event, '${escapeJs(d.name)}')" aria-label="删除 ${d.name}">×</button>
+      <span class="doc-name">${d.document_name || d.name}</span>
+      <span class="doc-chunks">${d.chunk_count ?? d.chunks ?? 0} 块</span>
+      <button class="doc-delete" type="button" onclick="deleteDoc(event, '${escapeJs(d.document_name || d.name)}')" aria-label="删除 ${d.document_name || d.name}">×</button>
     </div>`).join('');
 }
 
-function deleteDoc(event, name) {
+async function deleteDoc(event, name) {
   event.stopPropagation();
-  const ok = window.confirm(`确认删除文档“${name}”吗？\n删除后将无法在前端列表中恢复。`);
+  const ok = window.confirm(`确认删除文档“${name}”吗？\n将同步删除知识库中的向量、全文索引、分块和知识图谱数据。`);
   if (!ok) return;
-  uploadedDocs = uploadedDocs.filter(d => d.name !== name);
-  localStorage.setItem('ai_docs', JSON.stringify(uploadedDocs));
-  renderDocs();
+
+  const deleted = uploadedDocs.find(d => (d.document_name || d.name) === name);
+  if (!deleted) return;
+  if (!deleted.doc_hash && !deleted.docHash) {
+    alert('该文档缺少后端文档标识，无法安全删除。请刷新页面后重试。');
+    return;
+  }
+
+  try {
+    const response = await fetch('/api/docs/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ doc_hash: deleted.doc_hash || deleted.docHash })
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || '后端删除失败');
+    }
+
+    uploadedDocs = uploadedDocs.filter(d => (d.doc_hash || d.docHash) !== (deleted.doc_hash || deleted.docHash));
+    renderDocs();
+  } catch (error) {
+    console.error('删除文档失败', error);
+    alert('删除失败：' + error.message + '\n当前文档仍保留在列表中。');
+  }
+}
+
+function openHistoryKnowledge() {
+  window.open('/history-knowledge.html', '_blank', 'noopener,noreferrer');
+}
+
+async function loadDocuments() {
+  try {
+    const response = await fetch('/api/docs/active');
+    if (!response.ok) throw new Error('当前文档加载失败');
+    uploadedDocs = await response.json();
+    renderDocs();
+  } catch (error) {
+    console.error('加载当前文档失败', error);
+  }
+}
+
+async function clearAllKnowledgeBase() {
+  const count = uploadedDocs.length;
+  if (count === 0) {
+    alert('当前没有可删除的知识库文档。');
+    return;
+  }
+  const ok = window.confirm(`确认删除当前所有知识库吗？\n这将删除 ${count} 个文档及其全部分块、向量、索引和知识图谱数据。`);
+  if (!ok) return;
+
+  try {
+    const response = await fetch('/api/docs/delete-all', { method: 'POST' });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      throw new Error(result.error || '删除全部知识库失败');
+    }
+    uploadedDocs = [];
+    renderDocs();
+    alert(`已删除 ${result.deleted_documents || count} 个知识库文档。`);
+  } catch (error) {
+    console.error('删除全部知识库失败', error);
+    alert('删除失败：' + error.message);
+  }
 }
 
 function escapeJs(s) {
@@ -1139,7 +1240,7 @@ function autoResize(el) {
 //  Init
 // ══════════════════════════════════════════
 renderSessions();
-renderDocs();
+loadDocuments();
 loadTools();
 if (sessions.length > 0) {
   // don't auto-switch, just show sessions in sidebar

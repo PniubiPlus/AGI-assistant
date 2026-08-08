@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>历史知识库 · AI 助手</title>
+<style>
+:root{--bg:#f5f6fa;--card:#fff;--border:#eaecf0;--text:#1a1d23;--muted:#8b95a5;--primary:#6366f1;--primary-l:#ede9fe}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.page{max-width:900px;margin:0 auto;padding:42px 24px}.top{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}.title{font-size:25px;font-weight:700}.subtitle{margin-top:7px;color:var(--muted);font-size:13px}.back{border:1px solid var(--border);background:var(--card);color:#64748b;border-radius:9px;padding:8px 14px;cursor:pointer}.back:hover{color:var(--primary);background:var(--primary-l)}.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:8px;box-shadow:0 4px 18px rgba(30,41,59,.04)}.empty{text-align:center;padding:70px 20px;color:var(--muted);font-size:14px}.item{display:flex;align-items:center;gap:14px;padding:16px;border-bottom:1px solid #f1f3f5}.item:last-child{border-bottom:0}.icon{width:38px;height:38px;border-radius:10px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;color:#94a3b8}.info{flex:1;min-width:0}.name{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta{margin-top:5px;font-size:12px;color:var(--muted)}.hash{font-family:monospace;color:#a1a8b3;font-size:11px}
+</style>
+</head>
+<body>
+<main class="page"><div class="top"><div><div class="title">历史知识库</div><div class="subtitle">已删除的文档记录，仅供查看，不会参与当前知识库检索。</div></div><button class="back" onclick="window.close()">返回助手</button></div><section class="card" id="history"></section></main>
+<script>
+const el=document.getElementById('history');
+loadHistory();
+
+async function loadHistory(){
+  try{
+    const response=await fetch('/api/docs/deleted');
+    if(!response.ok) throw new Error('历史记录加载失败');
+    const list=await response.json();
+    if(!list.length){el.innerHTML='<div class="empty">暂无已删除文档记录</div>';return}
+    el.innerHTML=list.map(d=>`<div class="item"><div class="icon">▱</div><div class="info"><div class="name">${esc(d.document_name)}</div><div class="meta">删除时间：${new Date(d.deleted_at).toLocaleString('zh-CN')} · ${d.chunk_count||0} 块 · <span class="hash">${esc(d.doc_hash)}</span></div></div></div>`).join('');
+  }catch(error){
+    console.error(error);
+    el.innerHTML='<div class="empty">历史知识库暂时无法加载，请确认服务已连接。</div>';
+  }
+}
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+</script>
+</body>
+</html>
