@@ -29,6 +29,8 @@ public class HybridStore {
 
     private static final Logger log = LoggerFactory.getLogger(HybridStore.class);
     private static final ObjectMapper mapper = new ObjectMapper();
+    private static final int MAX_RAG_CHUNK_SAVE_RETRIES = 3;
+    private static final long RAG_CHUNK_SAVE_RETRY_BACKOFF_MS = 150L;
 
     private final AppConfig cfg;
     private final InfrastructureService infra;
@@ -75,11 +77,31 @@ public class HybridStore {
             if (emb != null && !emb.isEmpty()) {
                 try { embJson = mapper.writeValueAsString(emb); } catch (Exception ignored) {}
             }
-            long pgId = infra.saveRAGChunk(docHash, safeDocumentName, i, c.getContent(), embJson);
-            if (pgId < 0) {
-                log.warn("RAG chunk 写入 PG 失败 (idx={})", i);
+
+            long pgId = -1;
+            boolean saved = false;
+            for (int attempt = 1; attempt <= MAX_RAG_CHUNK_SAVE_RETRIES; attempt++) {
+                pgId = infra.saveRAGChunk(docHash, safeDocumentName, i, c.getContent(), embJson);
+                if (pgId >= 0) {
+                    saved = true;
+                    break;
+                }
+                log.warn("RAG chunk 写入 PG 失败 (idx={}, attempt={}/{})", i, attempt, MAX_RAG_CHUNK_SAVE_RETRIES);
+                if (attempt < MAX_RAG_CHUNK_SAVE_RETRIES) {
+                    try {
+                        Thread.sleep(RAG_CHUNK_SAVE_RETRY_BACKOFF_MS * attempt);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        log.warn("RAG chunk 写入重试被中断 (idx={})", i);
+                        break;
+                    }
+                }
+            }
+            if (!saved) {
+                log.warn("RAG chunk 写入 PG 连续失败，已停止当前 chunk 写入 (idx={})", i);
                 continue;
             }
+
             // ES
             if ("connected".equals(infra.getEsStatus())) {
                 infra.indexRAGChunkInES(pgId, c.getContent(), docHash, i);

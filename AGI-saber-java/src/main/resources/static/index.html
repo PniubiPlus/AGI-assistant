@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI 助手</title>
+<script src="https://gosspublic.alicdn.com/aliyun-oss-sdk-6.18.0.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -178,6 +179,37 @@ body {
 .doc-item:hover .doc-delete { opacity: 1; pointer-events: auto; background: var(--red-l); transform: translateY(-50%) scale(1); }
 .doc-item:hover .doc-name { padding-right: 28px; }
 .doc-delete:hover { background: var(--red); color: #fff; }
+
+.upload-progress-wrap {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid var(--border);
+}
+.upload-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text2);
+  margin-bottom: 8px;
+}
+.upload-progress-bar {
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+.upload-progress-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--primary), #818cf8);
+  transition: width .12s ease;
+}
 
 /* ── 近期对话 ── */
 .recent {
@@ -674,8 +706,17 @@ body {
       <div class="uz-text">上传个人文件</div>
       <div class="uz-sub">点击或拖拽到此处</div>
     </div>
-    <input type="file" id="fileInput" accept=".txt,.md,.pdf" multiple>
+    <input type="file" id="fileInput" accept=".txt,.md,.markdown,.pdf,.doc,.docx" multiple>
     <div class="doc-list" id="docList"></div>
+    <div class="upload-progress-wrap" id="uploadProgressWrap" style="display:none;">
+      <div class="upload-progress-head">
+        <span id="uploadProgressText">上传中</span>
+        <span id="uploadProgressPercent">0%</span>
+      </div>
+      <div class="upload-progress-bar">
+        <div class="upload-progress-fill" id="uploadProgressFill"></div>
+      </div>
+    </div>
   </div>
 
   <!-- 近期对话 -->
@@ -757,6 +798,23 @@ let sessions = JSON.parse(localStorage.getItem('ai_sessions') || '[]');
 let currentId = null;
 let uploadedDocs = [];
 let isLoading = false;
+
+const OSS_CONFIG = {
+  bucket: 'ai-agent-saber',
+  region: 'oss-cn-beijing',
+  endpoint: 'oss-cn-beijing.aliyuncs.com',
+  stsApi: '/api/oss/sts',
+  uploadDirMap: {
+    pdf: 'pdf/',
+    word: 'docx/'
+  }
+};
+
+const FILE_LIMITS = {
+  text: 2 * 1024 * 1024,
+  pdf: 30 * 1024 * 1024,
+  word: 20 * 1024 * 1024
+};
 
 // ══════════════════════════════════════════
 //  Session management
@@ -840,36 +898,254 @@ zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add(
 zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
 zone.addEventListener('drop', async e => {
   e.preventDefault(); zone.classList.remove('drag');
-  for (const file of e.dataTransfer.files) await uploadFile(file);
+  await handleFiles(e.dataTransfer.files);
 });
 
-async function uploadFile(file) {
-  const text = await file.text();
-  try {
-    const res = await fetch('/api/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: text, document_name: file.name })
-    }).then(r => r.json());
+const CLOUD_UPLOAD_ENDPOINT = '/api/oss/upload';
 
-    const doc = { name: file.name, chunks: res.chunk_count, docHash: res.doc_hash || '', ts: Date.now() };
-    uploadedDocs = uploadedDocs.filter(d => d.name !== file.name);
-    uploadedDocs.unshift(doc);
-    renderDocs();
+async function handleFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (files.length === 0) return;
+  if (files.length > 1) {
+    alert('当前仅支持单文件上传。');
+    return;
+  }
+  await uploadFile(files[0]);
+}
+
+async function uploadFile(file) {
+  const fileType = detectDocumentType(file.name);
+  if (fileType === 'unsupported') {
+    alert('格式不符，只接受 txt、md/markdown、pdf、word 这三类文档。');
+    return;
+  }
+
+  if (!checkFileSize(file, fileType)) return;
+
+  try {
+    if (fileType === 'text') {
+      await uploadTextDocument(file);
+      return;
+    }
+
+    if (fileType === 'pdf' || fileType === 'word') {
+      await uploadCloudDocument(file, fileType);
+      return;
+    }
   } catch(e) {
     console.error('上传失败', e);
+    alert('上传失败：' + (e && e.message ? e.message : '请稍后重试'));
   }
 }
 
+function detectDocumentType(filename) {
+  const name = String(filename || '').toLowerCase();
+  if (name.endsWith('.txt') || name.endsWith('.md') || name.endsWith('.markdown')) return 'text';
+  if (name.endsWith('.pdf')) return 'pdf';
+  if (name.endsWith('.doc') || name.endsWith('.docx')) return 'word';
+  return 'unsupported';
+}
+
+function checkFileSize(file, fileType) {
+  const limit = FILE_LIMITS[fileType];
+  if (limit && file.size > limit) {
+    alert(`文件超出大小限制：${formatFileSize(file.size)} / 最大允许 ${formatFileSize(limit)}。`);
+    return false;
+  }
+  return true;
+}
+
+function getCloudUploadPrompt(fileType) {
+  if (fileType === 'pdf') return '此格式需要上传到云端，请确认。\n文件类型：PDF';
+  if (fileType === 'word') return '此格式需要上传到云端，请确认。\n文件类型：Word';
+  return '此格式需要上传到云端，请确认。';
+}
+
+function formatFileSize(bytes) {
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return mb.toFixed(1) + 'MB';
+  const kb = bytes / 1024;
+  if (kb >= 1) return kb.toFixed(1) + 'KB';
+  return bytes + 'B';
+}
+
+function sanitizeFileName(name) {
+  return String(name || 'document').replace(/[\\/:*?"<>|\s]+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '') || 'document';
+}
+
+function getOriginalNameNoExt(filename) {
+  const base = String(filename || '');
+  const idx = base.lastIndexOf('.');
+  return idx > 0 ? base.slice(0, idx) : base;
+}
+
+function getFileExt(filename) {
+  const base = String(filename || '');
+  const idx = base.lastIndexOf('.');
+  return idx > 0 ? base.slice(idx + 1).toLowerCase() : '';
+}
+
+function getStoredFileName(file, seq = 0) {
+  const ext = getFileExt(file.name);
+  const baseName = sanitizeFileName(getOriginalNameNoExt(file.name));
+  const suffix = seq > 0 ? `_${seq}` : '';
+  return `${baseName}${suffix}.${ext}`;
+}
+
+function getExistingStoredNames(fileType) {
+  const dir = OSS_CONFIG.uploadDirMap[fileType] || '';
+  return uploadedDocs
+    .map(d => d.storedName || d.objectKey || d.document_name || d.name || '')
+    .filter(Boolean)
+    .map(name => {
+      const clean = String(name);
+      return clean.startsWith(dir) ? clean.slice(dir.length) : clean;
+    });
+}
+
+function getUniqueStoredName(file, fileType) {
+  const existing = new Set(getExistingStoredNames(fileType));
+  let seq = 0;
+  let storedName = getStoredFileName(file, seq);
+  while (existing.has(storedName)) {
+    seq += 1;
+    storedName = getStoredFileName(file, seq);
+  }
+  return storedName;
+}
+
+function buildOssObjectKey(file, fileType, storedName) {
+  return `${OSS_CONFIG.uploadDirMap[fileType] || ''}${storedName}`;
+}
+
+function showUploadProgress(percent = 0, text = '上传中') {
+  const wrap = document.getElementById('uploadProgressWrap');
+  const fill = document.getElementById('uploadProgressFill');
+  const percentText = document.getElementById('uploadProgressPercent');
+  const textEl = document.getElementById('uploadProgressText');
+  wrap.style.display = 'block';
+  fill.style.width = Math.max(0, Math.min(100, percent)) + '%';
+  percentText.textContent = Math.max(0, Math.min(100, Math.round(percent))) + '%';
+  textEl.textContent = text;
+}
+
+function hideUploadProgress() {
+  const wrap = document.getElementById('uploadProgressWrap');
+  const fill = document.getElementById('uploadProgressFill');
+  const percentText = document.getElementById('uploadProgressPercent');
+  const textEl = document.getElementById('uploadProgressText');
+  wrap.style.display = 'none';
+  fill.style.width = '0%';
+  percentText.textContent = '0%';
+  textEl.textContent = '上传中';
+}
+
+async function uploadTextDocument(file) {
+  const text = await file.text();
+  const res = await fetch('/api/upload', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: text, document_name: file.name })
+  }).then(r => r.json());
+
+  const doc = { name: file.name, chunks: res.chunk_count, docHash: res.doc_hash || '', ts: Date.now() };
+  uploadedDocs = uploadedDocs.filter(d => d.name !== file.name);
+  uploadedDocs.unshift(doc);
+  renderDocs();
+}
+
+async function uploadCloudDocument(file, fileType) {
+  const ok = window.confirm(`${getCloudUploadPrompt(fileType)}\n\n文件：${file.name}`);
+  if (!ok) return;
+
+  const result = await uploadToOss(file, fileType);
+  const doc = {
+    name: file.name,
+    chunks: result.chunk_count ?? result.chunkCount ?? '云端',
+    docHash: result.doc_hash || result.docHash || result.object_key || result.objectKey || '',
+    ossUrl: result.oss_url || result.ossUrl || result.url || '',
+    objectKey: result.object_key || result.objectKey || '',
+    storedName: result.stored_name || result.storedName || '',
+    fileType,
+    uploadType: fileType,
+    uploadStatus: 'cloud',
+    ts: Date.now()
+  };
+  uploadedDocs = uploadedDocs.filter(d => d.name !== file.name && d.doc_hash !== doc.docHash && d.docHash !== doc.docHash);
+  uploadedDocs.unshift(doc);
+  renderDocs();
+  alert('文件已上传到云端，后续将由后端读取处理。');
+}
+
+function requestSts() {
+  return fetch(OSS_CONFIG.stsApi).then(async r => {
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || data.ok === false) {
+      throw new Error(data.error || '获取 OSS 临时凭证失败');
+    }
+    return data;
+  });
+}
+
+async function uploadToOss(file, fileType) {
+  if (typeof OSS === 'undefined') {
+    throw new Error('OSS SDK 未加载成功，请检查网络或脚本地址。');
+  }
+
+  const sts = await requestSts();
+  const storedName = getUniqueStoredName(file, fileType);
+  const objectKey = buildOssObjectKey(file, fileType, storedName);
+  const client = new OSS({
+    region: sts.region || OSS_CONFIG.region,
+    accessKeyId: sts.accessKeyId,
+    accessKeySecret: sts.accessKeySecret,
+    stsToken: sts.securityToken,
+    bucket: sts.bucket || OSS_CONFIG.bucket,
+    endpoint: OSS_CONFIG.endpoint,
+    secure: true
+  });
+
+  showUploadProgress(1, `准备上传 ${file.name}`);
+  const uploadResult = await client.multipartUpload(objectKey, file, {
+    progress: (percent) => showUploadProgress(percent * 100, `上传 ${file.name}`)
+  });
+  hideUploadProgress();
+
+  const ossUrl = uploadResult.res && uploadResult.res.requestUrls && uploadResult.res.requestUrls[0]
+    ? uploadResult.res.requestUrls[0].split('?')[0]
+    : `https://${sts.bucket || OSS_CONFIG.bucket}.${OSS_CONFIG.endpoint}/${objectKey}`;
+
+  return {
+    ok: true,
+    object_key: objectKey,
+    stored_name: storedName,
+    oss_url: ossUrl,
+    bucket: sts.bucket || OSS_CONFIG.bucket,
+    region: sts.region || OSS_CONFIG.region,
+    file_name: file.name,
+    file_type: fileType,
+    file_size: file.size,
+    dir: sts.dir || (OSS_CONFIG.uploadDirMap[fileType] || ''),
+    upload_time: Date.now()
+  };
+}
+
+
 function renderDocs() {
   const el = document.getElementById('docList');
-  el.innerHTML = uploadedDocs.slice(0, 6).map(d => `
-    <div class="doc-item" title="${d.document_name || d.name}">
+  el.innerHTML = uploadedDocs.slice(0, 6).map(d => {
+    const displayName = d.document_name || d.name;
+    const extraInfo = d.uploadStatus === 'cloud'
+      ? `${d.fileType || 'cloud'} · OSS`
+      : `${d.chunk_count ?? d.chunks ?? 0} 块`;
+    return `
+    <div class="doc-item" title="${displayName}">
       <span class="doc-icon">✓</span>
-      <span class="doc-name">${d.document_name || d.name}</span>
-      <span class="doc-chunks">${d.chunk_count ?? d.chunks ?? 0} 块</span>
-      <button class="doc-delete" type="button" onclick="deleteDoc(event, '${escapeJs(d.document_name || d.name)}')" aria-label="删除 ${d.document_name || d.name}">×</button>
-    </div>`).join('');
+      <span class="doc-name">${displayName}</span>
+      <span class="doc-chunks">${extraInfo}</span>
+      <button class="doc-delete" type="button" onclick="deleteDoc(event, '${escapeJs(displayName)}')" aria-label="删除 ${displayName}">×</button>
+    </div>`;
+  }).join('');
 }
 
 async function deleteDoc(event, name) {
